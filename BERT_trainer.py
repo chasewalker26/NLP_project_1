@@ -3,14 +3,14 @@
 import os
 import csv
 import time
-from tqdm import tqdm
 import torch
-from enum import Enum
 import random
 import argparse
 import datetime
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
+from enum import Enum
 from torch.utils.data import TensorDataset, random_split, DataLoader, RandomSampler, SequentialSampler
 from transformers import BertTokenizer, BertForSequenceClassification, get_linear_schedule_with_warmup
 
