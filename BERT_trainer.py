@@ -18,20 +18,20 @@ seed_value = 42
 
 def fine_tune(tokenizer, model, data, data_labels, FLAGS, device):
     # Determine the maximum sentence length for BERT padding in a batched manner
-    # print("Determining Max Sentence Length")
-    # max_len = 0
-    # for i in tqdm(range(len(data))):
-    #     sentence = data[i]
-    #     # Tokenize the text and add `[CLS]` and `[SEP]` tokens.
-    #     tokenized_data = tokenizer.encode(sentence, add_special_tokens = True)
-    #     # Update the maximum sentence length.
-    #     max_len = max(max_len, len(tokenized_data))
+    print("Determining Max Sentence Length")
+    max_len = 0
+    for i in tqdm(range(len(data))):
+        sentence = data[i]
+        # Tokenize the text and add `[CLS]` and `[SEP]` tokens.
+        tokenized_data = tokenizer.encode(sentence, add_special_tokens = True)
+        # Update the maximum sentence length.
+        max_len = max(max_len, len(tokenized_data))
 
-    # # add 10 to max_length just in case
-    # max_len += 10
-    # print("Max sentence length set to: " + str(max_len))
+    # add 10 to max_length just in case
+    max_len += 10
+    print("Max sentence length set to: " + str(max_len))
 
-    max_len = 70
+    # max_len = 70
 
     # Tokenize all of the sentences and map the tokens to their word IDs.
     print("Tokenize all of the sentence data")
@@ -71,19 +71,22 @@ def fine_tune(tokenizer, model, data, data_labels, FLAGS, device):
     dataset = TensorDataset(tokenized_data, attention_masks, data_labels)
 
     # Train test split
-    train_percentage = 0.70
-    train_size = int(train_percentage * len(dataset))
-    val_size = len(dataset) - train_size
-    # Generator for random split so that it is consistent across training attempts
-    train_dataset, val_dataset = random_split(dataset, [train_size, val_size], generator = torch.Generator().manual_seed(seed_value))
+    if FLAGS.test_split == 100:
+        val_dataset = dataset
+    else:
+        train_percentage = (100 - FLAGS.test_split) / 100
+        train_size = int(train_percentage * len(dataset))
+        val_size = len(dataset) - train_size
+        # Generator for random split so that it is consistent across training attempts
+        train_dataset, val_dataset = random_split(dataset, [train_size, val_size], generator = torch.Generator().manual_seed(seed_value))
 
-    # Create the DataLoaders for our training and validation sets.
-    # We'll take training samples in random order. 
-    train_loader = DataLoader(
-        train_dataset,  # The training samples.
-        sampler = RandomSampler(train_dataset), # Select batches randomly
-        batch_size = FLAGS.batch_size # Trains with this batch size.
-    )
+        # Create the DataLoaders for our training and validation sets.
+        # We'll take training samples in random order. 
+        train_loader = DataLoader(
+            train_dataset,  # The training samples.
+            sampler = RandomSampler(train_dataset), # Select batches randomly
+            batch_size = FLAGS.batch_size # Trains with this batch size.
+        )
 
     # For validation the order doesn't matter, so we'll just read them sequentially.
     val_loader = DataLoader(
@@ -92,63 +95,69 @@ def fine_tune(tokenizer, model, data, data_labels, FLAGS, device):
         batch_size = FLAGS.batch_size # Evaluate with this batch size.
     )
 
-    # AdamW optimizer from the huggingface library
-    optimizer = torch.optim.AdamW(model.parameters(),
-        lr = FLAGS.lr,
-        eps = 1e-8 # args.adam_epsilon  - default is 1e-8.
-    )
-
-    # Total number of training steps is [number of batches] x [number of epochs]. 
-    total_steps = len(train_loader) * FLAGS.epochs
-    # Create the learning rate scheduler.
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps = 0, num_training_steps = total_steps)
-
-    random.seed(seed_value)
-    np.random.seed(seed_value)
-    torch.manual_seed(seed_value)
-    torch.cuda.manual_seed_all(seed_value)
-
-    # Make dir to save trained modelif needed
-    output_dir = FLAGS.model_dir_name
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    # train and validatde for all epochs, 
-    best_acc1 = 0
-    train_loss_tracker = []
-    train_acc_tracker = []
-    val_loss_tracker = []
-    val_acc_tracker = []
-
-    for epoch in tqdm(range(FLAGS.epochs)):
-        # train for an epoch
-        train_l, train_a = train(train_loader, model, optimizer, scheduler, epoch, FLAGS.print_freq, device)
-
-        train_loss_tracker.append(np.array(train_l))
-        train_acc_tracker.append(np.array(train_a))
-
+    # if we are evaluating a locally stored trained model
+    if FLAGS.evaluate: 
         # evaluate on the validation set
-        acc1, val_l, val_a = validate(val_loader, model, FLAGS.print_freq, device)
+        validate(val_loader, model, FLAGS.print_freq, FLAGS.evaluate, device)
+    # if we are fine-tuning from the pretrained huggingface model
+    else:
+        # AdamW optimizer from the huggingface library
+        optimizer = torch.optim.AdamW(model.parameters(),
+            lr = FLAGS.lr,
+            eps = 1e-8 # args.adam_epsilon  - default is 1e-8.
+        )
 
-        val_loss_tracker.append(np.array(val_l))
-        val_acc_tracker.append(np.array(val_a))
+        # Total number of training steps is [number of batches] x [number of epochs]. 
+        total_steps = len(train_loader) * FLAGS.epochs
+        # Create the learning rate scheduler.
+        scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps = 0, num_training_steps = total_steps)
 
-        # remember best acc@1
-        is_best = acc1 > best_acc1
-        best_acc1 = max(acc1, best_acc1)
+        random.seed(seed_value)
+        np.random.seed(seed_value)
+        torch.manual_seed(seed_value)
+        torch.cuda.manual_seed_all(seed_value)
 
-        # save the current model if it is better than the best so far
-        save_checkpoint(model, tokenizer, FLAGS.model_dir_name, is_best)
+        # Make dir to save trained modelif needed
+        output_dir = FLAGS.model_dir_name
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
 
-    # write the loss and acc values to a csv file
-    # save the noise ignorance test
-    with open("BERT_training_results.csv", 'w') as f:
-        write = csv.writer(f)
-        write.writerow(["Epochs: " + str(FLAGS.epochs), "Train Batches: " + str(len(train_loader)), "Validation Batches: " + str(len(val_loader))])
-        write.writerows(np.array(train_loss_tracker))
-        write.writerows(np.array(train_acc_tracker))
-        write.writerows(np.array(val_loss_tracker))
-        write.writerows(np.array(val_acc_tracker))
+        # train and validatde for all epochs, 
+        best_acc1 = 0
+        train_loss_tracker = []
+        train_acc_tracker = []
+        val_loss_tracker = []
+        val_acc_tracker = []
+
+        for epoch in tqdm(range(FLAGS.epochs)):
+            # train for an epoch
+            train_l, train_a = train(train_loader, model, optimizer, scheduler, epoch, FLAGS.print_freq, device)
+
+            train_loss_tracker.append(np.array(train_l))
+            train_acc_tracker.append(np.array(train_a))
+
+            # evaluate on the validation set
+            acc1, val_l, val_a = validate(val_loader, model, FLAGS.print_freq, FLAGS.evaluate, device)
+
+            val_loss_tracker.append(np.array(val_l))
+            val_acc_tracker.append(np.array(val_a))
+
+            # remember best acc@1
+            is_best = acc1 > best_acc1
+            best_acc1 = max(acc1, best_acc1)
+
+            # save the current model if it is better than the best so far
+            save_checkpoint(model, tokenizer, FLAGS.model_dir_name, is_best)
+
+        # write the loss and acc values to a csv file
+        # save the noise ignorance test
+        with open("BERT_training_results.csv", 'w') as f:
+            write = csv.writer(f)
+            write.writerow(["Epochs: " + str(FLAGS.epochs), "Train Batches: " + str(len(train_loader)), "Validation Batches: " + str(len(val_loader))])
+            write.writerows(np.array(train_loss_tracker))
+            write.writerows(np.array(train_acc_tracker))
+            write.writerows(np.array(val_loss_tracker))
+            write.writerows(np.array(val_acc_tracker))
 
     return
 
@@ -214,8 +223,11 @@ def train(train_loader, model, optimizer, scheduler, epoch, print_freq, device):
 
     return loss_tracker, acc_tracker
 
-def validate(val_loader, model, print_freq, device):
-    def run_validate(loader, base_progress=0):
+def validate(val_loader, model, print_freq, evaluate, device):
+    def run_validate(loader, base_progress = 0):
+        if evaluate:
+            true_pos, true_neg, false_pos, false_neg = 0, 0, 0, 0
+
         with torch.no_grad():
             end = time.time()
 
@@ -241,12 +253,42 @@ def validate(val_loader, model, print_freq, device):
                 loss_tracker.append(loss.item())
                 acc_tracker.append(acc1[0].item())
 
-                # measure elapsed time
+                if i != 0 and  i % print_freq == 0:
+                    progress.display(i + 1)
+
+                if evaluate:
+                    _, pred = logits.topk(1, 1, True, True)
+                    pred = pred.t()[0]
+
+                    for j in range(len(labels)):
+                        # not funny
+                        if labels[j] == 0:
+                            if pred[j] == 0:
+                                true_neg += 1
+                            elif pred[j] == 1:
+                                false_pos += 1
+                        # funny
+                        elif labels[j] == 1:
+                            if pred[j] == 0:
+                                false_neg += 1
+                            elif pred[j] == 1:
+                                true_pos += 1
+
+                # measure elapsed t ime
                 batch_time.update(time.time() - end)
                 end = time.time()
 
-                if i != 0 and  i % print_freq == 0:
-                    progress.display(i + 1)
+        if evaluate:
+            try:
+                acc = (true_pos + true_neg) / (true_pos + true_neg + false_pos + false_neg)
+                prec = true_pos / (true_pos + false_pos)
+                recall = true_pos / (true_pos + false_neg)
+                f1 = (2 * prec * recall) / (prec + recall)
+                # print("Classification Accuracy: " + str(top1))
+                print("Accuracy: " + str(acc), "    Precision: " + str(prec), "   Recall: " + str(recall), "    F1 Score: " + str(f1))
+            except(ZeroDivisionError):
+                print("Dataset unsuitable for precision and recall, it only has false classes.")
+
 
         return loss_tracker, acc_tracker
 
@@ -375,14 +417,13 @@ def main(FLAGS):
     device = 'cuda:' + str(FLAGS.cuda_num) if torch.cuda.is_available() else 'cpu'
 
     # load the dataset
-    df = pd.read_csv(FLAGS.data_file, delimiter = ',', converters = {'label': bool}, header = None, names = ['sentence', 'label'])
+    df = pd.read_csv(FLAGS.data_file, delimiter = ',', dtype={'label': bool}, header = 1, names = ['sentence', 'label'])
 
     # Get the sentence data and the labels into numpy arrays and discard the first row as it contains the headers
     # make the data a list of sentences
-    data = df.sentence.values[1:].tolist()
+    data = df.sentence.values.tolist()
     # make labels binary 0, 1 from bool
-    labels = torch.tensor(df.label.values[1:], dtype = int)
-
+    labels = torch.tensor(df.label.values, dtype = int)
 
     # Load the BERT tokenizer
     print('Loading BERT tokenizer...')
@@ -390,12 +431,24 @@ def main(FLAGS):
 
     # Load the BERT sequence classifier model
     print('Loading BERT model...')
-    model = BertForSequenceClassification.from_pretrained(
-        "bert-base-uncased", # BERT model with uncased vocab.
-        num_labels = 2, # binary classification.
-        output_attentions = False, # Whether the model returns attentions weights.
-        output_hidden_states = False # Whether the model returns all hidden-states.
-    )
+
+    # if we are evaluating a local trained model
+    if FLAGS.evaluate:
+        model = BertForSequenceClassification.from_pretrained(
+            FLAGS.model_dir_name, # BERT model with uncased vocab.
+            num_labels = 2, # binary classification.
+            output_attentions = False, # Whether the model returns attentions weights.
+            output_hidden_states = False # Whether the model returns all hidden-states.
+        )
+    # if we are fine-tuning from the pretrained huggingface model
+    else:
+        model = BertForSequenceClassification.from_pretrained(
+            "bert-base-uncased", # BERT model with uncased vocab.
+            num_labels = 2, # binary classification.
+            output_attentions = False, # Whether the model returns attentions weights.
+            output_hidden_states = False # Whether the model returns all hidden-states.
+        )
+
     # put model on specified device
     model.to(device)
 
@@ -404,15 +457,18 @@ def main(FLAGS):
     return
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser('Perform fine tuning of BERT for binary sentence classification.')
+    parser = argparse.ArgumentParser('Perform fine tuning of BERT binary sentence classification.')
     parser.add_argument('--cuda_num',
-                        type=int, default = 0,
-                        help='The number of the GPU you want to use.')
+            type=int, default = 0,
+            help='The number of the GPU you want to use.')
     parser.add_argument('--data_file',
-                type = str, default = "funny_dataset.csv",
-                help = 'The File for your binary sentence training set.')
+            type = str, default = "funny_dataset.csv",
+            help = 'The File for your binary sentence training set.')
+    parser.add_argument('--test_split',
+            type = int, default = 30,
+            help = 'Test split percentage as an integer 0 - 100.')
     parser.add_argument('--batch_size',
-            type = int, default = 16,
+            type = int, default = 32,
             help = '16 or 32 is recommended by BERT authors for fine tuning.')
     parser.add_argument('--print_freq',
             type = int, default = 100,
@@ -423,9 +479,12 @@ if __name__ == "__main__":
     parser.add_argument('--epochs',
             type = int, default = 2,
             help = '2, 3, 4 is recommended by BERT authors for fine tuning.')
+    parser.add_argument('--evaluate', 
+            dest='evaluate', action='store_true',
+            help='Evaluate a trained model from model_dir_name')
     parser.add_argument('--model_dir_name',
             type = str, default = "BERT_model/",
-            help = 'The directort to save the fine-tuned BERT model.')
+            help = 'The directory for the fine-tuned BERT model.')
     FLAGS, unparsed = parser.parse_known_args()
     
     main(FLAGS)
