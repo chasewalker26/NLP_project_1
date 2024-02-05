@@ -13,15 +13,15 @@ def pickle_to_csv(file_name, is_humorous):
         Outputs:
         None
         '''
-        
+
         # Open the specified file
         file = open(file_name, 'rb')
         text = pickle.load(file)
         # Semi-colons were not being handled correctly by
         # the CSV writer, so I switched them out for commas
         for i in range(len(text)):
-              if ';' in text[i]:
-                    text[i] = text[i].replace(';', ',')
+            if ';' in text[i]:
+                text[i] = text[i].replace(';', ',') 
         file.close()
 
         # Create the labels for the text
@@ -50,9 +50,8 @@ if __name__ == '__main__':
                         help='The name of the file to be converted.',
                         required=True)
     parser.add_argument('--is_humorous',
-                        type=bool,
-                        help='Whether or not the file contains jokes.',
-                        required=True)
+                        action='store_true',
+                        help='Whether or not the file contains jokes.')
     ARGS, _ = parser.parse_known_args()
 
     pickle_to_csv(ARGS.file_name, ARGS.is_humorous)
