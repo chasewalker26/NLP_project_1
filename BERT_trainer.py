@@ -39,7 +39,7 @@ def fine_tune(tokenizer, model, data, data_labels, FLAGS, device):
     attention_masks = []
     num_batches = int(len(data) / FLAGS.batch_size)
     remainder = len(data) % FLAGS.batch_size
-    # tokernize data in a batched manner
+    # tokenize data in a batched manner
     for i in tqdm(range(num_batches + 1)):
         if i < num_batches:
             sentences = data[(i * FLAGS.batch_size) : ((i * FLAGS.batch_size) + FLAGS.batch_size)]
@@ -462,7 +462,7 @@ if __name__ == "__main__":
             type=int, default = 0,
             help='The number of the GPU you want to use.')
     parser.add_argument('--data_file',
-            type = str, default = "funny_dataset.csv",
+            type = str, default = "datasets/funny_dataset.csv",
             help = 'The File for your binary sentence training set.')
     parser.add_argument('--test_split',
             type = int, default = 30,
