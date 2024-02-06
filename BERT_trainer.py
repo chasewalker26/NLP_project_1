@@ -253,9 +253,6 @@ def validate(val_loader, model, print_freq, evaluate, device):
                 loss_tracker.append(loss.item())
                 acc_tracker.append(acc1[0].item())
 
-                if i != 0 and  i % print_freq == 0:
-                    progress.display(i + 1)
-
                 if evaluate:
                     _, pred = logits.topk(1, 1, True, True)
                     pred = pred.t()[0]
@@ -274,20 +271,34 @@ def validate(val_loader, model, print_freq, evaluate, device):
                             elif pred[j] == 1:
                                 true_pos += 1
 
-                # measure elapsed t ime
-                batch_time.update(time.time() - end)
-                end = time.time()
+                if i != 0 and i % print_freq == 0:
+                    # measure elapsed time since the last update
+                    batch_time.update(time.time() - end)
+                    end = time.time()
+                    progress.display(i + 1)
 
+        # if we only want to measure a trained models performance
         if evaluate:
-            try:
-                acc = (true_pos + true_neg) / (true_pos + true_neg + false_pos + false_neg)
+            # we can always test for accuracy
+            acc = (true_pos + true_neg) / (true_pos + true_neg + false_pos + false_neg)
+
+            # if our dataset only contains labels of 0, we cannot test for precision or recall and therefore f1
+            if true_pos + false_neg == 0:
+                spec = true_neg / (true_neg + false_pos)
+                print("Accuracy: " + str(acc), "    Precision: ----", "    Recall: ----", "    Specificity: "  + str(spec), "    F1 Score: ----")
+            # if our dataset only contains labels of 1, we cannot test for specificity
+            elif true_neg + false_pos == 0:
                 prec = true_pos / (true_pos + false_pos)
                 recall = true_pos / (true_pos + false_neg)
                 f1 = (2 * prec * recall) / (prec + recall)
-                # print("Classification Accuracy: " + str(top1))
-                print("Accuracy: " + str(acc), "    Precision: " + str(prec), "   Recall: " + str(recall), "    F1 Score: " + str(f1))
-            except(ZeroDivisionError):
-                print("Dataset unsuitable for precision and recall, it only has false classes.")
+                print("Accuracy: " + str(acc), "    Precision: " + str(prec), "    Recall: " + str(recall), "    Specificity: ----", "    F1 Score: " + str(f1))
+            # if our dataset contains a mix of 0 and 1 labels, we can test for all metrics
+            else:
+                prec = true_pos / (true_pos + false_pos)
+                recall = true_pos / (true_pos + false_neg)
+                spec = true_neg / (true_neg + false_pos)
+                f1 = (2 * prec * recall) / (prec + recall)
+                print("Accuracy: " + str(acc), "    Precision: " + str(prec), "    Recall: " + str(recall), "    Specificity: "  + str(spec), "    F1 Score: " + str(f1))
 
 
         return loss_tracker, acc_tracker
