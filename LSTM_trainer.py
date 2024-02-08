@@ -16,21 +16,30 @@ from torchtext.vocab import build_vocab_from_iterator
 
 import csv
 
-def log_results(filename, epoch, train_loss, train_acc, valid_loss, valid_acc):
-    fields = ['Epoch', 'Train Loss', 'Train Accuracy', 'Validation Loss', 'Validation Accuracy']
-    exists = os.path.isfile(filename)
-    
-    with open(filename, 'a', newline='') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fields)
-        if not exists:
-            writer.writeheader()  # Only write header if file does not exist
-        writer.writerow({
-            'Epoch': epoch,
-            'Train Loss': train_loss,
-            'Train Accuracy': train_acc,
-            'Validation Loss': valid_loss,
-            'Validation Accuracy': valid_acc
-        })
+# def log_results(filename, epoch, train_loss, train_acc, valid_loss, valid_acc):
+#     fields = ['Epoch', 'Train Loss', 'Train Accuracy', 'Validation Loss', 'Validation Accuracy']
+#     exists = os.path.isfile(filename)
+#
+#     with open(filename, 'a', newline='') as csvfile:
+#         writer = csv.DictWriter(csvfile, fieldnames=fields)
+#         if not exists:
+#             writer.writeheader()  # Only write header if file does not exist
+#         writer.writerow({
+#             'Epoch': epoch,
+#             'Train Loss': train_loss,
+#             'Train Accuracy': train_acc,
+#             'Validation Loss': valid_loss,
+#             'Validation Accuracy': valid_acc
+#         })
+
+def log_results(filename, epochs, train_loss, train_acc, valid_loss, valid_acc):
+    with open(filename + ".csv", 'w') as f:
+        write = csv.writer(f)
+        write.writerow(["Epochs: " + str(epochs)])
+        write.writerows(np.array(train_loss))
+        write.writerows(np.array(train_acc))
+        write.writerows(np.array(valid_loss))
+        write.writerows(np.array(valid_acc))
 
 
 class TextLSTM(torch.nn.Module):
@@ -111,14 +120,26 @@ def test(data_):
             false_neg += ((pred == 0) & (labels == 1)).sum().item()
 
     # Evaluation metrics calculation
-    try:
-        acc_metric = (true_pos + true_neg) / (true_pos + true_neg + false_pos + false_neg)
+    # we can always test for accuracy
+    acc = (true_pos + true_neg) / (true_pos + true_neg + false_pos + false_neg)
+
+    # if our dataset only contains labels of 0, we cannot test for precision or recall and therefore f1
+    if true_pos + false_neg == 0:
+        spec = true_neg / (true_neg + false_pos)
+        print("Accuracy: " + str(acc), "    Precision: ----", "    Recall: ----", "    Specificity: "  + str(spec), "    F1 Score: ----")
+    # if our dataset only contains labels of 1, we cannot test for specificity
+    elif true_neg + false_pos == 0:
         prec = true_pos / (true_pos + false_pos)
         recall = true_pos / (true_pos + false_neg)
         f1 = (2 * prec * recall) / (prec + recall)
-        print(f"Accuracy: {acc_metric:.4f}, Precision: {prec:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}")
-    except ZeroDivisionError:
-        print("Dataset unsuitable for precision and recall, it only has false classes.")
+        print("Accuracy: " + str(acc), "    Precision: " + str(prec), "    Recall: " + str(recall), "    Specificity: ----", "    F1 Score: " + str(f1))
+    # if our dataset contains a mix of 0 and 1 labels, we can test for all metrics
+    else:
+        prec = true_pos / (true_pos + false_pos)
+        recall = true_pos / (true_pos + false_neg)
+        spec = true_neg / (true_neg + false_pos)
+        f1 = (2 * prec * recall) / (prec + recall)
+        print("Accuracy: " + str(acc), "    Precision: " + str(prec), "    Recall: " + str(recall), "    Specificity: "  + str(spec), "    F1 Score: " + str(f1))
 
     return loss / len(data_), acc / len(data_)
 
@@ -171,18 +192,25 @@ if __name__ == "__main__":
 
     filename = "LSTM_training_results.csv"
 
+    train_loss = [0] * EPOCHS
+    train_acc = [0] * EPOCHS
+    valid_loss = [0] * EPOCHS
+    valid_acc = [0] * EPOCHS
+
     for epoch in range(1, EPOCHS + 1):
         start_time = time.time()
-        train_loss, train_acc = train_func(train_dataset)
-        valid_loss, valid_acc = test(test_dataset)
+        train_loss[epoch - 1], train_acc[epoch - 1] = train_func(train_dataset)
+        valid_loss[epoch - 1], valid_acc[epoch - 1] = test(test_dataset)
 
-        # Log results
-        log_results(filename, epoch, train_loss, train_acc, valid_loss, valid_acc)
+        # log_results(filename, epoch, train_loss, train_acc, valid_loss, valid_acc)
 
         secs = int(time.time() - start_time)
         mins = secs / 60
         secs = secs % 60
 
         print(f'Epoch: {epoch}, | time in {mins} minutes, {secs} seconds')
-        print(f'\tLoss: {train_loss:.4f}(train)\t|\tAcc: {train_acc * 100:.1f}%(train)')
-        print(f'\tLoss: {valid_loss:.4f}(valid)\t|\tAcc: {valid_acc * 100:.1f}%(valid)')
+        print(f'\tLoss: {train_loss[epoch - 1]:.4f}(train)\t|\tAcc: {train_acc[epoch - 1] * 100:.1f}%(train)')
+        print(f'\tLoss: {valid_loss[epoch - 1]:.4f}(valid)\t|\tAcc: {valid_acc[epoch - 1] * 100:.1f}%(valid)')
+
+    # Log results
+    log_results(filename, EPOCHS, train_loss, train_acc, valid_loss, valid_acc)
