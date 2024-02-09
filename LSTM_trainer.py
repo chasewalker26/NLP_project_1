@@ -196,28 +196,27 @@ def main(FLAGS):
     # Convert lists of token indices into tensors and pad sequences
     text_data = [torch.tensor(text_sequence, dtype=torch.int64) for text_sequence in df['text']]
     text_data_padded = pad_sequence(text_data, batch_first=True, padding_value=vocab['<pad>'])
+    vocab_size = len(vocab)
 
     labels = torch.tensor(df['humor'].values, dtype=torch.int64)
-
-    # Split dataset
-    train_data, test_data, train_labels, test_labels = train_test_split(text_data_padded, labels, test_size = FLAGS.test_split / 100, random_state=42)
-
-    # Creating TensorDataset for train and test datasets
-    train_dataset = TensorDataset(train_data, train_labels)
-    test_dataset = TensorDataset(test_data, test_labels)
-    
-    # Define the model, criterion, optimizer, and scheduler
-    vocab_size = len(vocab)
 
     # if evaluating, load trained model
     if FLAGS.evaluate:
         model = torch.load(save_dir + "model_best.pth.tar")
+        test_dataset = TensorDataset(text_data_padded, labels)
     # else make fresh model
     else:
         model = TextLSTM(vocab_size, EMBEDDING_DIM, HIDDEN_DIM, 2, NUM_LAYERS, BIDIRECTIONAL, DROPOUT)
+        # Split dataset
+        train_data, test_data, train_labels, test_labels = train_test_split(text_data_padded, labels, test_size = FLAGS.test_split / 100, random_state=42)
+
+        # Creating TensorDataset for train and test datasets
+        train_dataset = TensorDataset(train_data, train_labels)
+        test_dataset = TensorDataset(test_data, test_labels)
 
     model.to(device)
 
+    # Define the criterion, optimizer, and scheduler
     criterion = torch.nn.CrossEntropyLoss().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
