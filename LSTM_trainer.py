@@ -33,7 +33,7 @@ import csv
 #         })
 
 def log_results(filename, epochs, train_loss, train_acc, valid_loss, valid_acc):
-    with open(filename + ".csv", 'w') as f:
+    with open(filename, 'w', newline='') as f:
         write = csv.writer(f)
         write.writerow(["Epochs: " + str(epochs)])
         write.writerows(np.array(train_loss))
@@ -77,62 +77,101 @@ def generate_batch(batch):
          lengths.append(processed_text.size(0))
     return torch.tensor(label_list, dtype=torch.int64), pad_sequence(text_list, batch_first=True), torch.tensor(lengths, dtype=torch.int64)
 
-def train_func(sub_train_):
+def train_func(sub_train_, model, criterion, optimizer, scheduler, batch_size, device):
+    model.train()
     # Train the model
-    train_loss = 0
-    train_acc = 0
-    data = DataLoader(sub_train_, batch_size=BATCH_SIZE, shuffle=True,
+    train_loss = []
+    train_acc = []
+    data = DataLoader(sub_train_, batch_size=batch_size, shuffle=True,
                       collate_fn=generate_batch)
     for i, (labels, text, lengths) in enumerate(data):
         optimizer.zero_grad()
         text, labels = text.to(device), labels.to(device)
         output = model(text, lengths)
         loss = criterion(output, labels)
-        train_loss += loss.item()
+        train_loss.append(loss.item() / batch_size)
         loss.backward()
         optimizer.step()
-        train_acc += (output.argmax(1) == labels).sum().item()
+        train_acc.append((output.argmax(1) == labels).sum().item() / batch_size)
+
+        if i % 500 == 0:
+            print(f'\tLoss: {np.array(train_loss).mean():.4f} (train)\t|\tAcc: {np.array(train_acc).mean() * 100:.1f}% (train)')
 
     # Adjust the learning rate
     scheduler.step()
 
-    return train_loss / len(sub_train_), train_acc / len(sub_train_)
+    # Correctly return average loss and accuracy
+    return np.array(train_loss), np.array(train_acc)
 
-def test(data_):
-    total_loss = 0  # Correctly accumulate total loss
-    acc = 0
+def test(data_, model, criterion, batch_size, device):
+    model.eval()
+    test_loss = []
+    test_acc = []
     total_samples = 0  # Keep track of total samples for accuracy calculation
     true_pos = 0
     true_neg = 0
     false_pos = 0
     false_neg = 0
-    data = DataLoader(data_, batch_size=BATCH_SIZE, collate_fn=generate_batch)
-    for labels, text, lengths in data:
+    data = DataLoader(data_, batch_size=batch_size, collate_fn=generate_batch)
+    for i, (labels, text, lengths) in enumerate(data):
         text, labels = text.to(device), labels.to(device)
         with torch.no_grad():
             output = model(text, lengths)
             pred = output.argmax(1)
             loss = criterion(output, labels)
-            total_loss += loss.item()  # Correct accumulation of loss
+            test_loss.append(loss.item() / batch_size)  # Correct accumulation of loss
+
             total_samples += labels.size(0)  # Update total samples
             true_pos += ((pred == 1) & (labels == 1)).sum().item()
             true_neg += ((pred == 0) & (labels == 0)).sum().item()
             false_pos += ((pred == 1) & (labels == 0)).sum().item()
             false_neg += ((pred == 0) & (labels == 1)).sum().item()
 
-    # Correctly calculate accuracy outside the loop
-    acc = (true_pos + true_neg) / total_samples
+            test_acc.append((pred == labels).sum().item() / batch_size)
+
+            if i % 500 == 0:
+                print(f'\tLoss: {np.array(test_loss).mean():.4f} (test)\t|\tAcc: {np.array(test_acc).mean() * 100:.1f}% (test)')
+
+
+    acc = (true_pos + true_neg) / (true_pos + true_neg + false_pos + false_neg)
+    # if our dataset only contains labels of 0, we cannot test for precision or recall and therefore f1
+    if true_pos + false_neg == 0:
+        spec = true_neg / (true_neg + false_pos)
+        print("Accuracy: " + str(acc), "    Precision: ----", "    Recall: ----", "    Specificity: "  + str(spec), "    F1 Score: ----")
+    # if our dataset only contains labels of 1, we cannot test for specificity
+    elif true_neg + false_pos == 0:
+        prec = true_pos / (true_pos + false_pos)
+        recall = true_pos / (true_pos + false_neg)
+        f1 = (2 * prec * recall) / (prec + recall)
+        print("Accuracy: " + str(acc), "    Precision: " + str(prec), "    Recall: " + str(recall), "    Specificity: ----", "    F1 Score: " + str(f1))
+    # if our dataset contains a mix of 0 and 1 labels, we can test for all metrics
+    else:
+        prec = true_pos / (true_pos + false_pos)
+        recall = true_pos / (true_pos + false_neg)
+        spec = true_neg / (true_neg + false_pos)
+        f1 = (2 * prec * recall) / (prec + recall)
+        print("Accuracy: " + str(acc), "    Precision: " + str(prec), "    Recall: " + str(recall), "    Specificity: "  + str(spec), "    F1 Score: " + str(f1))
 
     # Correctly return average loss and accuracy
-    return total_loss / total_samples, acc
+    return np.array(test_loss), np.array(test_acc)
+
+# save a checkpoint if it has the best seen accuracy
+def save_checkpoint(model, output_dir):
+    torch.save(model, output_dir)
 
 
-if __name__ == "__main__":
+
+def main(FLAGS):
     # Hyperparameters
-    EPOCHS = 25 
-    LR = 1e-3 
-    BATCH_SIZE = 32
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    EPOCHS = FLAGS.epochs
+    LR = FLAGS.lr 
+    BATCH_SIZE = FLAGS.batch_size
+    device = torch.device("cuda:" + str(FLAGS.cuda_num) if torch.cuda.is_available() else "cpu")
+
+    # make model directory
+    save_dir = FLAGS.model_dir_name
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
 
     #LSTM parameters
     NUM_LAYERS = 2
@@ -142,7 +181,7 @@ if __name__ == "__main__":
     EMBEDDING_DIM = 100
 
     # Load and preprocess dataset
-    df = pd.read_csv("datasets/funny_dataset.csv")
+    df = pd.read_csv(FLAGS.data_file)
     tokenizer = get_tokenizer('basic_english')
     vocab = build_vocab_from_iterator(map(tokenizer, df['text']), specials=["<unk>", "<pad>"])
     vocab.set_default_index(vocab["<unk>"])
@@ -161,7 +200,7 @@ if __name__ == "__main__":
     labels = torch.tensor(df['humor'].values, dtype=torch.int64)
 
     # Split dataset
-    train_data, test_data, train_labels, test_labels = train_test_split(text_data_padded, labels, test_size=0.25, random_state=42)
+    train_data, test_data, train_labels, test_labels = train_test_split(text_data_padded, labels, test_size = FLAGS.test_split / 100, random_state=42)
 
     # Creating TensorDataset for train and test datasets
     train_dataset = TensorDataset(train_data, train_labels)
@@ -169,32 +208,95 @@ if __name__ == "__main__":
     
     # Define the model, criterion, optimizer, and scheduler
     vocab_size = len(vocab)
-    model = TextLSTM(vocab_size, EMBEDDING_DIM, HIDDEN_DIM, 2, NUM_LAYERS, BIDIRECTIONAL, DROPOUT).to(device)
+
+    # if evaluating, load trained model
+    if FLAGS.evaluate:
+        model = torch.load(save_dir + "model_best.pth.tar")
+    # else make fresh model
+    else:
+        model = TextLSTM(vocab_size, EMBEDDING_DIM, HIDDEN_DIM, 2, NUM_LAYERS, BIDIRECTIONAL, DROPOUT)
+
+    model.to(device)
+
     criterion = torch.nn.CrossEntropyLoss().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
 
-    filename = "LSTM_training_results.csv"
+    train_loss = []
+    train_acc = []
+    valid_loss = []
+    valid_acc = []
 
-    train_loss = [0] * EPOCHS
-    train_acc = [0] * EPOCHS
-    valid_loss = [0] * EPOCHS
-    valid_acc = [0] * EPOCHS
+    best_acc1 = 0
 
-    for epoch in range(1, EPOCHS + 1):
-        start_time = time.time()
-        train_loss[epoch - 1], train_acc[epoch - 1] = train_func(train_dataset)
-        valid_loss[epoch - 1], valid_acc[epoch - 1] = test(test_dataset)
+    # if evaluating,no epochs needed
+    if FLAGS.evaluate:
+        test(test_dataset, model, criterion, BATCH_SIZE, device)
+    # train the model
+    else:
+        for epoch in tqdm(range(1, EPOCHS + 1), desc = "Epoch: "):
+            start_time = time.time()
 
-        # log_results(filename, epoch, train_loss, train_acc, valid_loss, valid_acc)
 
-        secs = int(time.time() - start_time)
-        mins = secs / 60
-        secs = secs % 60
+            # train and test for all epochs
+            train_loss_epoch, train_acc_epoch = train_func(train_dataset, model, criterion, optimizer, scheduler, BATCH_SIZE, device)
+            valid_loss_epoch, valid_acc_epoch = test(test_dataset, model, criterion, BATCH_SIZE, device)
 
-        print(f'Epoch: {epoch}, | time in {mins} minutes, {secs} seconds')
-        print(f'\tLoss: {train_loss[epoch - 1]:.4f}(train)\t|\tAcc: {train_acc[epoch - 1] * 100:.1f}%(train)')
-        print(f'\tLoss: {valid_loss[epoch - 1]:.4f}(valid)\t|\tAcc: {valid_acc[epoch - 1] * 100:.1f}%(valid)')
+            # remember best acc@1
+            is_best = np.array(train_acc_epoch).mean() * 100 > best_acc1
+            best_acc1 = max(np.array(train_acc_epoch).mean() * 100, best_acc1)
 
-    # Log results
-    log_results(filename, EPOCHS, train_loss, train_acc, valid_loss, valid_acc)
+            # save the current model if it is better than the best so far
+            if is_best:
+                save_checkpoint(model, save_dir + "model_best.pth.tar")
+
+            # track loss and acc
+            train_loss.append(train_loss_epoch)
+            train_acc.append(train_acc_epoch)
+            valid_loss.append(valid_loss_epoch)
+            valid_acc.append(valid_acc_epoch)
+
+            secs = int(time.time() - start_time)
+            mins = secs / 60
+            secs = secs % 60
+
+            print(f'Epoch: {epoch}, | Elapsed Time: {mins:.2f} minutes, {secs} seconds')
+            print(f'\tLoss: {np.array(train_loss_epoch).mean():.4f}(train)\t|\tAcc: {np.array(train_acc_epoch).mean() * 100:.1f}%(train)')
+            print(f'\tLoss: {np.array(valid_loss_epoch).mean():.4f}(valid)\t|\tAcc: {np.array(valid_acc_epoch).mean() * 100:.1f}%(valid)')
+
+        # Log results
+        log_results("LSTM_training_results.csv", EPOCHS, train_loss, train_acc, valid_loss, valid_acc)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser('Perform training of LSTM for binary sentence classification.')
+    parser.add_argument('--cuda_num',
+            type=int, default = 0,
+            help='The number of the GPU you want to use.')
+    parser.add_argument('--data_file',
+            type = str, default = "datasets/funny_dataset.csv",
+            help = 'The File for your binary sentence training set.')
+    parser.add_argument('--test_split',
+            type = int, default = 30,
+            help = 'Test split percentage as an integer 0 - 100.')
+    parser.add_argument('--batch_size',
+            type = int, default = 32,
+            help = 'Batch size.')
+    parser.add_argument('--print_freq',
+            type = int, default = 100,
+            help = 'How many batches should pass before a training progress update is printed.')
+    parser.add_argument('--lr',
+            type = float, default = 1e-3,
+            help = 'learning rate xe-y.')
+    parser.add_argument('--epochs',
+            type = int, default = 2,
+            help = 'Number of epochs for training.')
+    parser.add_argument('--evaluate', 
+            dest='evaluate', action='store_true',
+            help='Evaluate a trained model from model_dir_name')
+    parser.add_argument('--model_dir_name',
+            type = str, default = "LSTM_model/",
+            help = 'The directory for the fine-tuned LSTM model.')
+    FLAGS, unparsed = parser.parse_known_args()
+    
+    main(FLAGS)

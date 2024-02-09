@@ -8,6 +8,7 @@ __pycache__/
 
 # models 
 BERT_model/
+LSTM_model/
 
 # Distribution / packaging
 .Python
