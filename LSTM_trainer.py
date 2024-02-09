@@ -99,8 +99,9 @@ def train_func(sub_train_):
     return train_loss / len(sub_train_), train_acc / len(sub_train_)
 
 def test(data_):
-    loss = 0
+    total_loss = 0  # Correctly accumulate total loss
     acc = 0
+    total_samples = 0  # Keep track of total samples for accuracy calculation
     true_pos = 0
     true_neg = 0
     false_pos = 0
@@ -112,36 +113,19 @@ def test(data_):
             output = model(text, lengths)
             pred = output.argmax(1)
             loss = criterion(output, labels)
-            loss += loss.item()
-            acc += (pred == labels).sum().item()
+            total_loss += loss.item()  # Correct accumulation of loss
+            total_samples += labels.size(0)  # Update total samples
             true_pos += ((pred == 1) & (labels == 1)).sum().item()
             true_neg += ((pred == 0) & (labels == 0)).sum().item()
             false_pos += ((pred == 1) & (labels == 0)).sum().item()
             false_neg += ((pred == 0) & (labels == 1)).sum().item()
 
-    # Evaluation metrics calculation
-    # we can always test for accuracy
-    acc = (true_pos + true_neg) / (true_pos + true_neg + false_pos + false_neg)
+    # Correctly calculate accuracy outside the loop
+    acc = (true_pos + true_neg) / total_samples
 
-    # if our dataset only contains labels of 0, we cannot test for precision or recall and therefore f1
-    if true_pos + false_neg == 0:
-        spec = true_neg / (true_neg + false_pos)
-        print("Accuracy: " + str(acc), "    Precision: ----", "    Recall: ----", "    Specificity: "  + str(spec), "    F1 Score: ----")
-    # if our dataset only contains labels of 1, we cannot test for specificity
-    elif true_neg + false_pos == 0:
-        prec = true_pos / (true_pos + false_pos)
-        recall = true_pos / (true_pos + false_neg)
-        f1 = (2 * prec * recall) / (prec + recall)
-        print("Accuracy: " + str(acc), "    Precision: " + str(prec), "    Recall: " + str(recall), "    Specificity: ----", "    F1 Score: " + str(f1))
-    # if our dataset contains a mix of 0 and 1 labels, we can test for all metrics
-    else:
-        prec = true_pos / (true_pos + false_pos)
-        recall = true_pos / (true_pos + false_neg)
-        spec = true_neg / (true_neg + false_pos)
-        f1 = (2 * prec * recall) / (prec + recall)
-        print("Accuracy: " + str(acc), "    Precision: " + str(prec), "    Recall: " + str(recall), "    Specificity: "  + str(spec), "    F1 Score: " + str(f1))
+    # Correctly return average loss and accuracy
+    return total_loss / total_samples, acc
 
-    return loss / len(data_), acc / len(data_)
 
 if __name__ == "__main__":
     # Hyperparameters
